@@ -92,11 +92,19 @@ PPP_CB_BOILERPLATE(on_ssm)
 
 // this creates the 
 
+static prog_point watch = {0, 0, 0};
 int mem_callback(CPUState *env, target_ulong pc, target_ulong addr,
                        target_ulong size, void *buf, bool is_write,
                        std::map<prog_point,string_pos> &text_tracker) {
     prog_point p = {};
     get_prog_point(env, &p);
+
+    static int debug = 0;
+
+    if (watch == p && !is_write) {
+        printf("%c", *(uint8_t *)buf);
+        debug--;
+    }
 
     string_pos &sp = text_tracker[p];
 
@@ -121,6 +129,17 @@ int mem_callback(CPUState *env, target_ulong pc, target_ulong addr,
                 f.pc = p.pc;
                 f.asid = p.cr3;
                 matchstacks[p] = f;
+
+                if (watch.pc == 0 && p.cr3 > 0) {
+                    printf("setting watch: "TARGET_FMT_lx"\n", p.pc);
+                    watch.pc = p.pc;
+                    watch.caller = p.caller;
+                    watch.cr3 = p.cr3;
+
+                    char *str = strndup((char *)tofind[str_idx], strlens[str_idx]);
+                    printf("%s", str);
+                    panda_memsavep(fopen("sspmem.raw", "w"));
+                }
 
                 // call the i-found-a-match registered callbacks here
                 PPP_RUN_CB(on_ssm, env, pc, addr, tofind[str_idx], strlens[str_idx], is_write)
