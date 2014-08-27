@@ -108,6 +108,8 @@ int mem_callback(CPUState *env, target_ulong pc, target_ulong addr,
 
     string_pos &sp = text_tracker[p];
 
+    static bool saved = false;
+
     for (unsigned int i = 0; i < size; i++) {
         uint8_t val = ((uint8_t *)buf)[i];
         for(int str_idx = 0; str_idx < num_strings; str_idx++) {
@@ -130,15 +132,9 @@ int mem_callback(CPUState *env, target_ulong pc, target_ulong addr,
                 f.asid = p.cr3;
                 matchstacks[p] = f;
 
-                if (watch.pc == 0 && p.cr3 > 0) {
-                    printf("setting watch: "TARGET_FMT_lx"\n", p.pc);
-                    watch.pc = p.pc;
-                    watch.caller = p.caller;
-                    watch.cr3 = p.cr3;
-
-                    char *str = strndup((char *)tofind[str_idx], strlens[str_idx]);
-                    printf("%s", str);
+                if (!saved) {
                     panda_memsavep(fopen("sspmem.raw", "w"));
+                    saved = true;
                 }
 
                 // call the i-found-a-match registered callbacks here
