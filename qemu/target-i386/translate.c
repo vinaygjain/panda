@@ -7978,7 +7978,9 @@ static void gen_intermediate_code_internal(CPUState *env,
                 rr_mode != RR_OFF ||
 #endif
                 panda_update_pc) {
-                gen_op_update_panda_pc(pc_ptr);
+
+    tcg_gen_st_i64(pc_ptr, cpu_env, offsetof(CPUState, panda_guest_pc));
+//                gen_op_update_panda_pc(pc_ptr);
             }
 #ifdef CONFIG_SOFTMMU
             if (rr_mode != RR_OFF) {
