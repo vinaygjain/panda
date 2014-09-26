@@ -34,9 +34,9 @@ extern "C" {
 #include <algorithm>
 
 #define DEFAULT_LOG_FILE "nsac_task_struct.txt"
-#define MAX_RECORDS	10
-#define INTERVAL	10
-#define LOOP		200
+#define MAX_RECORDS	1000
+#define INTERVAL	2
+#define MAX_PROCESSES		2000
 
 /*
 	To get the TASK_INIT run the following: "sudo grep init_task /boot/Symbol.map-*"
@@ -82,14 +82,34 @@ uint64_t bytes_read, bytes_written;
 uint64_t num_reads, num_writes;
 
 // Recording
-uint64_t record_count;
+
+struct record {
+	int count;
+	int pid[MAX_PROCESSES];
+	target_ulong addr[MAX_PROCESSES];
+	target_ulong next_ts[MAX_PROCESSES];
+	char name[MAX_PROCESSES][16];
+};
+
+int record_count;
+struct record record_A, record_B;
+struct record *record_curr;
+struct record *record_old;
 
 void print_task_struct(void) {
 
 #ifdef CONFIG_SOFTMMU
-	int res = -1;
+	int res = -1, i, j;
 	uint8_t local_buf[TARGET_PAGE_SIZE];
 	ram_addr_t addr = TASK_INIT;
+
+	if (record_count%2 == 0) {
+		record_curr = &record_A;
+		record_old = &record_B;
+	} else {
+		record_curr = &record_B;
+		record_old = &record_A;
+	}
 
 	if (addr < ram_size)
 		res = panda_physical_memory_rw(addr, local_buf, TARGET_PAGE_SIZE, 0);
@@ -106,16 +126,18 @@ void print_task_struct(void) {
 						((local_buf[TASK_0_TASKS_OFFSET+2]) * HEX2) + \
 						((local_buf[TASK_0_TASKS_OFFSET+3]) * HEX3));
 
-		fprintf(plugin_log, "Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
-				(target_ulong)addr,
-				(int)pid,
-				(char *)&local_buf[TASK_0_COMM_OFFSET],
-				next_addr);
+		record_curr->count = 0;
+		record_curr->pid[record_curr->count] = (int)pid;
+		record_curr->addr[record_curr->count] = (target_ulong)addr;
+		record_curr->next_ts[record_curr->count] = (target_ulong)next_addr;
+		strncpy(record_curr->name[record_curr->count], (char *)&local_buf[TASK_0_COMM_OFFSET], 16);
+		record_curr->count = record_curr->count + 1;
+
 		addr = next_addr;
 	}
 
-	int loop = LOOP;
-	while(loop--) {
+	i = MAX_PROCESSES;
+	while(--i) {
 		if ((addr+TARGET_PAGE_SIZE) < ram_size)
 			res = panda_physical_memory_rw(addr, local_buf, TARGET_PAGE_SIZE, 0);
 		else
@@ -136,14 +158,57 @@ void print_task_struct(void) {
 							((local_buf[TASK_TASKS_OFFSET+2]) * HEX2) + \
 							((local_buf[TASK_TASKS_OFFSET+3]) * HEX3));
 
-			fprintf(plugin_log, "Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
-					(target_ulong)addr,
-					(int)pid,
-					(char *)&local_buf[TASK_COMM_OFFSET],
-					next_addr);
+			record_curr->pid[record_curr->count] = (int)pid;
+			record_curr->addr[record_curr->count] = (target_ulong)addr;
+			record_curr->next_ts[record_curr->count] = (target_ulong)next_addr;
+			strncpy(record_curr->name[record_curr->count], (char *)&local_buf[TASK_COMM_OFFSET], 16);
+			record_curr->count = record_curr->count + 1;
+
 			addr = next_addr;
 		} else
 			break;
+	}
+
+	if (record_count == 0) // Print to file.
+		for (i = 0; i < record_curr->count; i++)
+			fprintf(plugin_log, "Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
+					record_curr->addr[i],
+					record_curr->pid[i],
+					record_curr->name[i],
+					record_curr->next_ts[i]);
+	else {
+		int removed[record_old->count];
+		int found;
+		for (i = 0; i < record_old->count; i++)
+			removed[i] = 1;
+
+		// Added processes.
+		for (i = 0; i < record_curr->count; i++) {
+			found = 0;
+			for (j = 0; j < record_old->count; j++) {
+				if (record_curr->pid[i] == record_old->pid[j]) {
+					removed[j] = 0;
+					found = 1;
+					//break;
+				}
+			}
+
+			if (found == 0)
+				fprintf(plugin_log, "Added:   Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
+							record_curr->addr[i],
+							record_curr->pid[i],
+							record_curr->name[i],
+							record_curr->next_ts[i]);
+		}
+
+		// Removed processes.
+		for (i = 0; i < record_old->count; i++)
+			if (removed[i] == 1)
+				fprintf(plugin_log, "Removed: Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
+							record_old->addr[i],
+							record_old->pid[i],
+							record_old->name[i],
+							record_old->next_ts[i]);	
 	}
 #endif
 }
@@ -160,7 +225,7 @@ int mem_write_callback(CPUState *env, target_ulong pc, target_ulong addr,
 		(curr_stamp - last_record_time) > (uint64_t)(1000000*INTERVAL)) {
 
 		last_record_time = curr_stamp;
-		fprintf(plugin_log, "\n\nTASK_STRUCT\nTime: %lu\n\n", curr_stamp);
+		fprintf(plugin_log, "\nTASK_STRUCT\tTime: %lu\n", curr_stamp);
 		print_task_struct();
 		record_count++;
 	} 
