@@ -34,22 +34,25 @@ extern "C" {
 #include <algorithm>
 
 #define DEFAULT_LOG_FILE "nsac_task_struct.txt"
-#define MAX_RECORDS 10
-#define INTERVAL 10
-#define LOOP 200
+#define MAX_RECORDS	10
+#define INTERVAL	10
+#define LOOP		200
 
 /*
 	To get the TASK_INIT run the following: "sudo grep init_task /boot/Symbol.map-*"
-	Only consider the 7 LSBs
-	The offsets provided here are kernel specific.
+	nly consider the 7 LSBs
+	he offsets provided here are kernel specific.
 */
-#define TASK_INIT 0x160d020
-#define TASK_0_PID_OFFSET 481
-#define TASK_0_COMM_OFFSET 920
-#define TASK_0_TASKS_OFFSET 368
-#define TASK_PID_OFFSET (481-368)
-#define TASK_COMM_OFFSET (920-368)
-#define TASK_TASKS_OFFSET (368-368)
+#define TASK_INIT		0x160d020
+#define TASK_0_PID_OFFSET	481
+#define TASK_0_COMM_OFFSET	920
+#define TASK_0_TASKS_OFFSET	368
+#define TASK_PID_OFFSET		(481-368)
+#define TASK_COMM_OFFSET	(920-368)
+#define TASK_TASKS_OFFSET	(368-368)
+#define HEX3			(256*256*256)
+#define HEX2			(256*256)
+#define HEX1			256
 
 // These need to be extern "C" so that the ABI is compatible with
 // QEMU/PANDA, which is written in C
@@ -57,7 +60,7 @@ extern "C" {
 	bool init_plugin(void *);
 	void uninit_plugin(void *);
 	int mem_write_callback(CPUState *env, target_ulong pc, target_ulong addr,
-				target_ulong size, void *buf);
+	target_ulong size, void *buf);
 }
 
 // Timestamps
@@ -82,35 +85,32 @@ uint64_t num_reads, num_writes;
 uint64_t record_count;
 
 void print_task_struct(void) {
+
 #ifdef CONFIG_SOFTMMU
-    int res = -1;
-    uint8_t local_buf[TARGET_PAGE_SIZE];
-    ram_addr_t addr = TASK_INIT;
-	
+	int res = -1;
+	uint8_t local_buf[TARGET_PAGE_SIZE];
+	ram_addr_t addr = TASK_INIT;
+
 	if (addr < ram_size)
 		res = panda_physical_memory_rw(addr, local_buf, TARGET_PAGE_SIZE, 0);
 
 	if (res != -1) {
 
-		long unsigned int pid = (
-						(((int)local_buf[TASK_0_PID_OFFSET])*256*256*256) + \
-						(((int)local_buf[TASK_0_PID_OFFSET+1])*256*256) + \
-						(((int)local_buf[TASK_0_PID_OFFSET+2])*256) + \
-						((int)local_buf[TASK_0_PID_OFFSET+3])
-						);
+		target_ulong pid = ((((int)local_buf[TASK_0_PID_OFFSET]) * HEX3) + \
+					(((int)local_buf[TASK_0_PID_OFFSET+1]) * HEX2) + \
+					(((int)local_buf[TASK_0_PID_OFFSET+2]) * HEX1) + \
+					((int)local_buf[TASK_0_PID_OFFSET+3]));
 
-		long unsigned int next_addr = (
-								(local_buf[TASK_0_TASKS_OFFSET]) + \
-								((local_buf[TASK_0_TASKS_OFFSET+1])*256) + \
-								((local_buf[TASK_0_TASKS_OFFSET+2])*256*256) + \
-								((local_buf[TASK_0_TASKS_OFFSET+3])*256*256*256)
-							);
+		target_ulong next_addr = ((local_buf[TASK_0_TASKS_OFFSET]) + \
+						((local_buf[TASK_0_TASKS_OFFSET+1]) * HEX1) + \
+						((local_buf[TASK_0_TASKS_OFFSET+2]) * HEX2) + \
+						((local_buf[TASK_0_TASKS_OFFSET+3]) * HEX3));
 
-		fprintf(plugin_log, "Addr: %08x PID: %04lu Name: %018s Next: %08x\n",
-							addr,
-							pid,
-							(char *)&local_buf[TASK_0_COMM_OFFSET],
-							next_addr);
+		fprintf(plugin_log, "Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
+				(target_ulong)addr,
+				(int)pid,
+				(char *)&local_buf[TASK_0_COMM_OFFSET],
+				next_addr);
 		addr = next_addr;
 	}
 
@@ -123,27 +123,24 @@ void print_task_struct(void) {
 
 		if (res != -1) {
 
-			long unsigned int pid = (
-								(((int)local_buf[TASK_PID_OFFSET])*256*256*256) + \
-								(((int)local_buf[TASK_PID_OFFSET+1])*256*256) + \
-								(((int)local_buf[TASK_PID_OFFSET+2])*256) + \
-								((int)local_buf[TASK_PID_OFFSET+3])
-								);
+			target_ulong pid = ((((int)local_buf[TASK_PID_OFFSET]) * HEX3) + \
+						(((int)local_buf[TASK_PID_OFFSET+1]) * HEX2) + \
+						(((int)local_buf[TASK_PID_OFFSET+2]) * HEX1) + \
+						((int)local_buf[TASK_PID_OFFSET+3]));
+
 			if (pid <= 0)
 				break;
 
-			long unsigned int next_addr = (
-										(local_buf[TASK_TASKS_OFFSET]) + \
-										((local_buf[TASK_TASKS_OFFSET+1])*256) + \
-										((local_buf[TASK_TASKS_OFFSET+2])*256*256) + \
-										((local_buf[TASK_TASKS_OFFSET+3])*256*256*256) 
-									);
+			target_ulong next_addr = ((local_buf[TASK_TASKS_OFFSET]) + \
+							((local_buf[TASK_TASKS_OFFSET+1]) * HEX1) + \
+							((local_buf[TASK_TASKS_OFFSET+2]) * HEX2) + \
+							((local_buf[TASK_TASKS_OFFSET+3]) * HEX3));
 
-			fprintf(plugin_log, "Addr: %08x PID: %04lu Name: %018s Next: %08x\n",
-								addr,
-								pid,
-								(char *)&local_buf[TASK_COMM_OFFSET],
-								next_addr);
+			fprintf(plugin_log, "Addr: " TARGET_FMT_lx " PID: %04d Name: %16s Next: " TARGET_FMT_lx "\n",
+					(target_ulong)addr,
+					(int)pid,
+					(char *)&local_buf[TASK_COMM_OFFSET],
+					next_addr);
 			addr = next_addr;
 		} else
 			break;
@@ -152,14 +149,16 @@ void print_task_struct(void) {
 }
 
 int mem_write_callback(CPUState *env, target_ulong pc, target_ulong addr,
-						target_ulong size, void *buf) {
+	target_ulong size, void *buf) {
+
 	bytes_written += size;
 	num_writes++;
 
 	UpdateTimeStamp();
 
 	if (record_count < MAX_RECORDS &&
-	   (curr_stamp - last_record_time) > (uint64_t)(1000000*INTERVAL)) {
+		(curr_stamp - last_record_time) > (uint64_t)(1000000*INTERVAL)) {
+
 		last_record_time = curr_stamp;
 		fprintf(plugin_log, "\n\nTASK_STRUCT\nTime: %lu\n\n", curr_stamp);
 		print_task_struct();
@@ -236,6 +235,7 @@ void uninit_plugin(void *self) {
 
 	fflush(plugin_log);
 	fclose(plugin_log);
+
 	printf("Memory statistics: %lu loads, %lu stores, "
 		"%lu bytes read, %lu bytes written.\n",
 		num_reads, num_writes, bytes_read, bytes_written);
