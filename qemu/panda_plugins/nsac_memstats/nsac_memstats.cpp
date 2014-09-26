@@ -1,7 +1,7 @@
 /* PANDABEGINCOMMENT
 * 
 * Authors:
-*  Vinay Jain             vganeshmalja@stonybrook.edu
+*  Vinay Jain             vganeshmalja@cs.stonybrook.edu
 * 
 * This work is licensed under the terms of the GNU GPL, version 2. 
 * See the COPYING file in the top-level directory. 
@@ -34,7 +34,8 @@ extern "C" {
 #include <algorithm>
 
 #define DEFAULT_LOG_FILE "nsac_memstats.txt"
-#define MAX_RECORDS 100000000
+#define MAX_RECORDS 10000000
+
 // These need to be extern "C" so that the ABI is compatible with
 // QEMU/PANDA, which is written in C
 extern "C" {
@@ -65,6 +66,7 @@ uint64_t UpdateTimeStamp(void) {
 
 // This is where we'll write out the memstat data
 FILE *plugin_log;
+int precise_pc_enabled;
 
 uint64_t bytes_read, bytes_written;
 uint64_t num_reads, num_writes;
@@ -73,18 +75,26 @@ uint64_t num_reads, num_writes;
 uint64_t record_count;
 struct record records[MAX_RECORDS];
 
+void flush_records() {
+	uint64_t i;
+	for (i = 0; i < record_count; i++) {
+		fprintf(plugin_log, "%c:%lu:" TARGET_FMT_lx ":" TARGET_FMT_lx ":%d\n",
+				records[i].type,
+				records[i].stamp,
+				records[i].pc,
+				records[i].addr,
+				(int)records[i].size);
+	}
+	record_count = 0;
+}
+
 int mem_write_callback(CPUState *env, target_ulong pc, target_ulong addr,
 						target_ulong size, void *buf) {
 	bytes_written += size;
 	num_writes++;
 
-/*
-	if (record_count%(uint64_t)10000 == 1)
-		panda_enable_precise_pc();
-
-	if (record_count%(uint64_t)10000 >= 2)
-		panda_disable_precise_pc();
-*/
+	if (record_count >= MAX_RECORDS)
+		flush_records();
 
 	if (record_count < MAX_RECORDS) {
 		records[record_count].stamp = UpdateTimeStamp();
@@ -93,7 +103,7 @@ int mem_write_callback(CPUState *env, target_ulong pc, target_ulong addr,
 		records[record_count].addr = addr;
 		records[record_count].size = (uint8_t)size;
 		record_count++;
-	}
+	} 
 
 	return 1;
 }
@@ -103,13 +113,8 @@ int mem_read_callback(CPUState *env, target_ulong pc, target_ulong addr,
 	bytes_read += size;
 	num_reads++;
 
-/*
-	if (record_count%(uint64_t)10000 == 1)
-		panda_enable_precise_pc();
-
-	if (record_count%(uint64_t)10000 >= 2)
-		panda_disable_precise_pc();
-*/
+	if (record_count >= MAX_RECORDS)
+		flush_records();
 
 	if (record_count < MAX_RECORDS) {
 		records[record_count].stamp = UpdateTimeStamp();
@@ -161,12 +166,13 @@ bool init_plugin(void *self) {
 	gettimeofday(&tv,NULL);
 	start_seconds = (uint64_t)tv.tv_sec;
 
-// Currently only supported for I386
-//#if defined(TARGET_I386)
 	panda_cb pcb;
 
-	// Need this to get EIP with our callbacks
-	panda_disable_precise_pc();
+	// Enable Precise PC
+	panda_do_flush_tb();
+	panda_enable_precise_pc();
+	precise_pc_enabled = 1;
+
 	// Enable memory logging
 	panda_enable_memcb();
 
@@ -174,23 +180,20 @@ bool init_plugin(void *self) {
 	panda_register_callback(self, PANDA_CB_VIRT_MEM_READ, pcb);
 	pcb.virt_mem_write = mem_write_callback;
 	panda_register_callback(self, PANDA_CB_VIRT_MEM_WRITE, pcb);
-//#else
-//	fprintf(stderr, "The nsac_memstats is not supported on this platform.\n");
-//	return false;
-//#endif
+
 	return true;
 }
 
 void uninit_plugin(void *self) {
-	uint64_t i;
-	for (i = 0; i < record_count; i++) {
-		fprintf(plugin_log, "%c:%lu:" TARGET_FMT_lx ":" TARGET_FMT_lx ":%d\n",
-				records[i].type,
-				records[i].stamp,
-				records[i].pc,
-				records[i].addr,
-				(int)records[i].size);
+
+	if (precise_pc_enabled == 1) {
+		// Disable Precise PC
+		panda_do_flush_tb();
+		panda_disable_precise_pc();
+		precise_pc_enabled = 0;
 	}
+
+	flush_records();
 	fflush(plugin_log);
 	fclose(plugin_log);
 	printf("Memory statistics: %lu loads, %lu stores, "
