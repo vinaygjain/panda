@@ -1,1 +1,1 @@
-PANDA_PLUGINS = nsac_memstats memstats memdump
+PANDA_PLUGINS = nsac_task_struct nsac_memstats memstats memdump
